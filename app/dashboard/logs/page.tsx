@@ -1,141 +1,173 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useRecords } from '@/lib/records-context';
 import { formatHash } from '@/lib/hash';
 import { formatDistanceToNow } from 'date-fns';
-import { History } from 'lucide-react';
+import { ShieldCheck, ShieldAlert, RefreshCw, Link2, Lock, Info } from 'lucide-react';
+import { toast } from 'sonner';
 
 export default function LogsPage() {
-  const { accessLogs } = useRecords();
-  const [filterRecordId, setFilterRecordId] = useState('');
-  const [filterAccessor, setFilterAccessor] = useState('');
+  const { accessLogs, refreshLogs } = useRecords();
+  const [filter, setFilter] = useState('');
+  const [chainValid, setChainValid] = useState<boolean | null>(null);
+  const [checking, setChecking] = useState(false);
 
-  const filteredLogs = useMemo(() => {
-    return accessLogs.filter(log => {
-      const recordMatch = !filterRecordId ||
-        log.recordId.toLowerCase().includes(filterRecordId.toLowerCase());
-      const accessorMatch = !filterAccessor ||
-        (log.doctorName?.toLowerCase().includes(filterAccessor.toLowerCase()) ||
-          log.accessedBy
-            .toLowerCase()
-            .includes(filterAccessor.toLowerCase()));
+  const verifyChain = async () => {
+    setChecking(true);
+    try {
+      const res = await fetch('/api/audit');
+      const data = await res.json();
+      setChainValid(Boolean(data.chainIntegrity));
+      if (data.chainIntegrity) {
+        toast.success(`Cryptographic audit chain verified! ${data.entries?.length || 0} sequential links intact.`);
+      } else {
+        toast.error('Audit chain validation failed: Hash linkage broken!');
+      }
+    } catch {
+      toast.error('Could not verify audit chain.');
+    } finally {
+      setChecking(false);
+    }
+  };
 
-      return recordMatch && accessorMatch;
-    });
-  }, [accessLogs, filterRecordId, filterAccessor]);
+  useEffect(() => {
+    verifyChain();
+  }, [accessLogs.length]);
+
+  const filtered = useMemo(
+    () =>
+      accessLogs.filter(
+        (log) =>
+          !filter ||
+          log.action.toLowerCase().includes(filter.toLowerCase()) ||
+          (log.actor || log.accessedBy || '').toLowerCase().includes(filter.toLowerCase()) ||
+          log.details?.toLowerCase().includes(filter.toLowerCase())
+      ),
+    [accessLogs, filter]
+  );
 
   return (
-    <div className="space-y-8">
+    <div className="max-w-6xl mx-auto space-y-6 pb-12">
       {/* Header */}
-      <div>
-        <h1 className="text-4xl font-bold text-foreground">Access Logs</h1>
-        <p className="text-muted-foreground mt-2">
-          View all access history for your medical records
-        </p>
-      </div>
-
-      {/* Filters */}
-      <Card className="p-6 border-border">
-        <h2 className="text-lg font-semibold mb-4 text-foreground">Filters</h2>
-        <div className="grid md:grid-cols-2 gap-4">
-          <div>
-            <label className="block text-sm font-medium mb-2 text-foreground">
-              Record ID
-            </label>
-            <Input
-              placeholder="Filter by record ID..."
-              value={filterRecordId}
-              onChange={e => setFilterRecordId(e.target.value)}
-              className="font-mono text-xs"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium mb-2 text-foreground">
-              Accessed By
-            </label>
-            <Input
-              placeholder="Filter by doctor name or address..."
-              value={filterAccessor}
-              onChange={e => setFilterAccessor(e.target.value)}
-            />
-          </div>
-        </div>
-      </Card>
-
-      {/* Access Logs Table */}
-      <Card className="p-6 border-border">
-        <div className="mb-4">
-          <p className="text-sm text-muted-foreground">
-            Showing {filteredLogs.length} of {accessLogs.length} entries
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b pb-6">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">Tamper-Evident Audit Trail</h1>
+          <p className="text-muted-foreground mt-2 text-sm max-w-2xl leading-relaxed">
+            Every clinical event, blockchain anchor, access grant, integrity check, and tampering detection is
+            cryptographically logged into a SHA-256 hash chain.
           </p>
         </div>
 
-        {filteredLogs.length > 0 ? (
-          <div className="overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Record ID</TableHead>
-                  <TableHead>Accessed By</TableHead>
-                  <TableHead>Doctor Name</TableHead>
-                  <TableHead>Action</TableHead>
-                  <TableHead>Timestamp</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filteredLogs.map(log => (
-                  <TableRow key={log.id}>
-                    <TableCell className="font-mono text-xs">
-                      {formatHash(log.recordId)}
-                    </TableCell>
-                    <TableCell className="font-mono text-xs">
-                      {log.accessedBy.slice(0, 10)}...
-                    </TableCell>
-                    <TableCell className="text-sm">
-                      {log.doctorName || '-'}
-                    </TableCell>
-                    <TableCell>
-                      <span
-                        className={`px-2 py-1 rounded text-xs font-medium ${
-                          log.action === 'grant'
-                            ? 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-100'
-                            : log.action === 'view'
-                              ? 'bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-100'
-                              : 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-100'
-                        }`}
-                      >
-                        {log.action}
-                      </span>
-                    </TableCell>
-                    <TableCell className="text-sm text-muted-foreground">
-                      {formatDistanceToNow(log.timestamp, { addSuffix: true })}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
+        <div className="flex items-center gap-3">
+          {chainValid !== null && (
+            <Badge
+              className={`text-xs px-3 py-1 font-semibold flex items-center gap-1.5 ${
+                chainValid
+                  ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                  : 'bg-red-600 hover:bg-red-700 text-white animate-pulse'
+              }`}
+            >
+              {chainValid ? <ShieldCheck size={14} /> : <ShieldAlert size={14} />}
+              {chainValid ? 'Chain Intact (Verified)' : 'Chain Compromised'}
+            </Badge>
+          )}
+
+          <Button variant="outline" size="sm" onClick={verifyChain} disabled={checking} className="gap-2">
+            <RefreshCw size={14} className={checking ? 'animate-spin' : ''} />
+            Verify Chain
+          </Button>
+        </div>
+      </div>
+
+      {/* Trust Assumptions Card */}
+      <Card className="p-5 border bg-muted/30 text-xs space-y-2 leading-relaxed">
+        <div className="flex items-center gap-2 font-semibold text-foreground">
+          <Info size={15} className="text-primary" />
+          Audit Trust Assumptions & Cryptographic Architecture
+        </div>
+        <p className="text-muted-foreground">
+          <strong>On-chain events</strong> (registrations, amendments, consent grants) are permanently secured by Ethereum consensus.
+          <strong> Off-chain audit events</strong> (logins, file downloads, verification checks, simulated tampering attempts) are
+          chained sequentially using SHA-256 (<code className="font-mono">entryHash = SHA256(prevHash | timestamp | action | actor | ...)</code>).
+        </p>
+        <p className="text-muted-foreground">
+          An attacker cannot modify or delete past entries without invalidating every subsequent entry&apos;s hash. Trust assumptions
+          remain on server process isolation and database administration permissions.
+        </p>
+      </Card>
+
+      {/* Search & Filter */}
+      <Card className="p-4">
+        <Input
+          placeholder="Filter audit logs by action, actor, or details (e.g. 'amendment', 'tampering', '0x7099...')"
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          className="text-xs"
+        />
+      </Card>
+
+      {/* Audit Log Table */}
+      <Card className="overflow-x-auto shadow-sm">
+        {filtered.length === 0 ? (
+          <p className="text-sm text-muted-foreground text-center py-12">No audit entries found matching the filter.</p>
         ) : (
-          <div className="text-center py-12 text-muted-foreground">
-            <History className="mx-auto mb-3 opacity-30" size={40} />
-            <p>No access logs found</p>
-            <p className="text-sm mt-1">
-              {filterRecordId || filterAccessor
-                ? 'Try adjusting your filters'
-                : 'No access activity yet'}
-            </p>
-          </div>
+          <Table>
+            <TableHeader>
+              <TableRow className="text-xs">
+                <TableHead>Time</TableHead>
+                <TableHead>Event Type</TableHead>
+                <TableHead>Source</TableHead>
+                <TableHead>Actor / Account</TableHead>
+                <TableHead>Cryptographic Hash Link</TableHead>
+                <TableHead>Details</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {filtered.map((log) => (
+                <TableRow key={log.id} className="text-xs">
+                  <TableCell className="text-muted-foreground whitespace-nowrap">
+                    {formatDistanceToNow(log.timestamp, { addSuffix: true })}
+                  </TableCell>
+                  <TableCell>
+                    <span
+                      className={`font-medium px-2 py-0.5 rounded text-[11px] ${
+                        log.action.includes('tamper')
+                          ? 'bg-red-100 text-red-800 dark:bg-red-950/60 dark:text-red-300 font-bold'
+                          : log.action.includes('amendment')
+                            ? 'bg-indigo-100 text-indigo-800 dark:bg-indigo-950/60 dark:text-indigo-300 font-bold'
+                            : log.action.includes('verification')
+                              ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300'
+                              : 'bg-muted text-foreground'
+                      }`}
+                    >
+                      {log.action.replaceAll('_', ' ')}
+                    </span>
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant="outline" className="text-[10px]">
+                      {log.source}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="font-mono text-[11px]">{formatHash(log.actor || log.accessedBy)}</TableCell>
+                  <TableCell className="font-mono text-[10px]">
+                    <div className="flex items-center gap-1 text-muted-foreground" title={`Entry: ${log.entryHash}`}>
+                      <Link2 size={12} className="text-primary shrink-0" />
+                      <span>{log.entryHash ? formatHash(log.entryHash) : '—'}</span>
+                    </div>
+                  </TableCell>
+                  <TableCell className="max-w-xs truncate text-muted-foreground text-[11px]" title={log.details}>
+                    {log.details || '—'}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
         )}
       </Card>
     </div>

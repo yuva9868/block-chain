@@ -1,242 +1,147 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
+import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from '@/components/ui/dialog';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { useRecords } from '@/lib/records-context';
 import { useWeb3 } from '@/lib/web3-context';
-import { grantAccess, isValidAddress, getRecordsSharedWith } from '@/lib/web3';
+import { formatAddress, isValidAddress } from '@/lib/web3';
 import { formatHash } from '@/lib/hash';
 import { formatDistanceToNow } from 'date-fns';
 import { toast } from 'sonner';
-import { Lock, Eye, FileText } from 'lucide-react';
-import { DocumentViewer } from '@/components/dashboard/document-viewer';
-import type { MedicalRecord } from '@/types';
+import { explainWalletError, sendGrantAccess, sendRevokeAccess } from '@/lib/chain/browser';
+import { TxStatus } from '@/components/tx-status';
+import type { MedicalRecord, TxState } from '@/types';
 
 export default function RecordsPage() {
-  const { records, refreshLogs } = useRecords();
-  const { wallet, role } = useWeb3();
-  const [selectedRecord, setSelectedRecord] = useState<string | null>(null);
-  const [doctorAddress, setDoctorAddress] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [isDialogOpen, setIsDialogOpen] = useState(false);
-  const [viewingRecord, setViewingRecord] = useState<MedicalRecord | null>(null);
-
+  const { records, refreshRecords, refreshLogs } = useRecords();
+  const { wallet, role, chain, hasWallet } = useWeb3();
   const isDoctor = role === 'doctor';
-  const displayRecords = isDoctor && wallet.address
-    ? getRecordsSharedWith(wallet.address)
-    : records;
+  const [selected, setSelected] = useState<MedicalRecord | null>(null);
+  const [doctor, setDoctor] = useState('');
+  const [tx, setTx] = useState<TxState>({ status: 'idle' });
 
-  useEffect(() => {
-    if (wallet.address) setDoctorAddress(wallet.address);
-  }, [wallet.address]);
+  const isDemo = !hasWallet || !chain.configured || String(wallet.address || '').toLowerCase().startsWith('0xd3');
 
-  const handleGrantAccess = async () => {
-    if (!selectedRecord) {
-      toast.error('No record selected');
+  const runConsent = async (action: 'grant' | 'revoke') => {
+    if (!selected || !isValidAddress(doctor)) {
+      toast.error('A valid doctor address (40 hex characters) is required.');
       return;
     }
-
-    if (!doctorAddress || !isValidAddress(doctorAddress)) {
-      toast.error('Please enter a valid Ethereum address');
-      return;
-    }
-
-    setIsLoading(true);
+    setTx({ status: 'pending' });
     try {
-      const txHash = await grantAccess(selectedRecord, doctorAddress);
-      refreshLogs();
-      toast.success('Access granted successfully!', {
-        description: `Transaction: ${txHash.slice(0, 10)}...`,
-      });
+      if (isDemo) {
+        const res = await fetch(`/api/records/${selected.id}/access`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action, doctor, relay: true }),
+        });
+        const body = await res.json();
+        if (!res.ok) throw new Error(body.error || 'Consent update failed');
+        setTx({ status: 'confirmed', hash: '0x' + '0'.repeat(64) });
+        await refreshRecords();
+        await refreshLogs();
+        toast.success(action === 'grant' ? 'Consent granted (demo relayer)' : 'Consent revoked (demo relayer)');
+        return;
+      }
 
-      // Reset form (keep doctor wallet same as patient)
-      setSelectedRecord(null);
-      setDoctorAddress(wallet.address ?? '');
-      setIsDialogOpen(false);
+      const sent = action === 'grant' ? await sendGrantAccess(selected.id, doctor) : await sendRevokeAccess(selected.id, doctor);
+      setTx({ status: 'pending', hash: sent.hash });
+      const receipt = await sent.wait();
+      if (!receipt || receipt.status !== 1) {
+        setTx({ status: 'reverted', hash: sent.hash, error: 'Transaction reverted' });
+        return;
+      }
+      const res = await fetch(`/api/records/${selected.id}/access`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, doctor, txHash: receipt.hash }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error);
+      setTx({ status: 'confirmed', hash: receipt.hash });
+      await refreshRecords();
+      await refreshLogs();
+      toast.success(action === 'grant' ? 'Consent granted after confirmation' : 'Consent revoked after confirmation');
     } catch (error) {
-      toast.error('Failed to grant access');
-      console.error(error);
-    } finally {
-      setIsLoading(false);
+      setTx({ status: 'error', hash: tx.hash, error: explainWalletError(error) });
+      toast.error(explainWalletError(error));
     }
   };
 
   return (
-    <div className="space-y-8">
-      {/* Header */}
+    <div className="space-y-6">
       <div>
-        <h1 className="text-4xl font-bold text-foreground">
-          {isDoctor ? 'Records shared with me' : 'My Records'}
-        </h1>
+        <h1 className="text-3xl font-semibold">{isDoctor ? 'Authorized records' : 'My records'}</h1>
         <p className="text-muted-foreground mt-2">
           {isDoctor
-            ? 'Records that patients have granted you access to view'
-            : 'View and manage access to your medical records'}
+            ? 'Only records with an active on-chain grant for this wallet are listed. Changing a URL will not bypass the API.'
+            : 'Grant and revoke access with real contract transactions. Previously downloaded copies cannot be erased remotely.'}
         </p>
       </div>
-
-      {/* Records Table */}
-      <Card className="p-6 border-border">
-        {displayRecords.length > 0 ? (
-          <div className="overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Filename</TableHead>
-                  <TableHead>Description</TableHead>
-                  <TableHead>Hash</TableHead>
-                  <TableHead>Date</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Document</TableHead>
-                  {!isDoctor && <TableHead>Action</TableHead>}
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {displayRecords.map(record => (
-                  <TableRow key={record.id}>
-                    <TableCell className="font-medium">
-                      <div className="flex items-center gap-2">
-                        <FileText size={16} className="text-primary" />
-                        {record.filename}
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-muted-foreground text-sm">
-                      {record.description}
-                    </TableCell>
-                    <TableCell className="font-mono text-xs">
-                      <div className="flex flex-col">
-                        <span className="text-xs">{formatHash(record.hash)}</span>
-                        <span className="text-[10px] text-muted-foreground mt-0.5">
-                          Full: {record.hash.slice(0, 8)}...{record.hash.slice(-8)}
-                        </span>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      {formatDistanceToNow(record.timestamp, {
-                        addSuffix: true,
-                      })}
-                    </TableCell>
-                    <TableCell>
-                      <span className="px-2 py-1 bg-green-100 text-green-700 rounded text-xs font-medium dark:bg-green-900 dark:text-green-100">
-                        {record.status}
-                      </span>
-                    </TableCell>
-                    <TableCell>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => setViewingRecord(record)}
-                        disabled={!record.fileContent}
-                        className="gap-2"
-                      >
-                        <Eye size={16} />
-                        {record.fileContent ? 'View' : 'No file'}
-                      </Button>
-                    </TableCell>
-                    {!isDoctor && (
-                      <TableCell>
-                        <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-                          <DialogTrigger asChild>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => setSelectedRecord(record.id)}
-                            >
-                              <Lock size={16} />
-                              Grant Access
-                            </Button>
-                          </DialogTrigger>
-                          <DialogContent>
-                            <DialogHeader>
-                              <DialogTitle>Grant Access</DialogTitle>
-                              <DialogDescription>
-                                Doctor wallet is the same as your connected
-                                (patient) wallet. Pre-filled below.
-                              </DialogDescription>
-                            </DialogHeader>
-                            <div className="space-y-4">
-                              <div>
-                                <label className="block text-sm font-medium mb-2">
-                                  Doctor&apos;s Wallet Address (same as patient)
-                                </label>
-                                <Input
-                                  placeholder="0x..."
-                                  value={doctorAddress}
-                                  onChange={e => setDoctorAddress(e.target.value)}
-                                  disabled={isLoading}
-                                  className="font-mono text-sm"
-                                />
-                              </div>
-                              <div className="bg-secondary p-3 rounded text-sm text-muted-foreground">
-                                Record:{' '}
-                                <span className="font-mono">
-                                  {formatHash(record.hash)}
-                                </span>
-                              </div>
-                              <div className="flex gap-3">
-                                <Button
-                                  variant="outline"
-                                  onClick={() => setIsDialogOpen(false)}
-                                  disabled={isLoading}
-                                >
-                                  Cancel
-                                </Button>
-                                <Button
-                                  onClick={handleGrantAccess}
-                                  disabled={isLoading || !doctorAddress}
-                                >
-                                  {isLoading ? 'Granting...' : 'Grant Access'}
-                                </Button>
-                              </div>
-                            </div>
-                          </DialogContent>
-                        </Dialog>
-                      </TableCell>
-                    )}
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
+      <Card className="p-6 overflow-x-auto">
+        {records.length === 0 ? (
+          <p className="text-sm text-muted-foreground text-center py-10">No records available for this wallet.</p>
         ) : (
-          <div className="text-center py-12 text-muted-foreground">
-            <Lock className="mx-auto mb-3 opacity-30" size={40} />
-            <p>{isDoctor ? 'No records shared with you yet' : 'No records yet'}</p>
-            <p className="text-sm mt-1">
-              {isDoctor
-                ? 'Patients can grant you access from their My Records page'
-                : 'Upload your first medical record to get started'}
-            </p>
-          </div>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>File</TableHead>
+                <TableHead>Hash</TableHead>
+                <TableHead>Integrity</TableHead>
+                <TableHead>Updated</TableHead>
+                <TableHead></TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {records.map((record) => (
+                <TableRow key={record.id}>
+                  <TableCell>
+                    <Link className="text-primary underline" href={`/dashboard/records/${record.id}`}>
+                      {record.filename}
+                    </Link>
+                  </TableCell>
+                  <TableCell className="font-mono text-xs">{formatHash(record.contentHash)}</TableCell>
+                  <TableCell>{record.verification?.status || record.status}</TableCell>
+                  <TableCell>{formatDistanceToNow(record.createdAt || Date.now(), { addSuffix: true })}</TableCell>
+                  <TableCell>
+                    {!isDoctor && (
+                      <Button size="sm" variant="outline" onClick={() => setSelected(record)}>
+                        Consent
+                      </Button>
+                    )}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
         )}
       </Card>
-
-      {/* Document Viewer */}
-      {viewingRecord && (
-        <DocumentViewer
-          record={viewingRecord}
-          isOpen={!!viewingRecord}
-          onClose={() => setViewingRecord(null)}
-        />
-      )}
+      <Dialog open={!!selected} onOpenChange={() => setSelected(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Manage doctor consent</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            Record {selected ? formatHash(selected.id) : ''} · active grants:{' '}
+            {(selected?.grants || []).filter((g) => !g.revokedAt).map((g) => formatAddress(g.address)).join(', ') || 'none'}
+          </p>
+          <Input placeholder="Doctor wallet 0x..." value={doctor} onChange={(e) => setDoctor(e.target.value)} className="font-mono" />
+          <div className="flex gap-2">
+            <Button onClick={() => runConsent('grant')} disabled={tx.status === 'pending'}>
+              Grant
+            </Button>
+            <Button variant="outline" onClick={() => runConsent('revoke')} disabled={tx.status === 'pending'}>
+              Revoke
+            </Button>
+          </div>
+          <TxStatus tx={tx} />
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

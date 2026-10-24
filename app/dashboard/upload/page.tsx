@@ -8,237 +8,157 @@ import { Textarea } from '@/components/ui/textarea';
 import { useWeb3 } from '@/lib/web3-context';
 import { useRecords } from '@/lib/records-context';
 import { generateFileHash, formatHash } from '@/lib/hash';
-import { addRecord } from '@/lib/web3';
+import { explainWalletError, sendRegisterRecord } from '@/lib/chain/browser';
+import { TxStatus } from '@/components/tx-status';
 import { toast } from 'sonner';
 import { Cloud, CheckCircle } from 'lucide-react';
+import type { TxState } from '@/types';
 
 export default function UploadPage() {
-  const { wallet, role } = useWeb3();
-  const { refreshRecords } = useRecords();
-  const isDoctor = role === 'doctor';
+  const { wallet, role, chain, hasWallet } = useWeb3();
+  const { refreshRecords, refreshLogs } = useRecords();
   const [file, setFile] = useState<File | null>(null);
   const [description, setDescription] = useState('');
+  const [recordType, setRecordType] = useState('lab');
+  const [recordDate, setRecordDate] = useState('');
   const [hash, setHash] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
+  const [tx, setTx] = useState<TxState>({ status: 'idle' });
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
-    if (selectedFile) {
-      setFile(selectedFile);
-      setHash('');
-
-      // Generate hash
-      const fileHash = await generateFileHash(selectedFile);
-      setHash(fileHash);
-      toast.success('File hash generated successfully');
-    }
+    if (!selectedFile) return;
+    setFile(selectedFile);
+    setHash(await generateFileHash(selectedFile));
   };
 
-  // Convert file to base64
-  const fileToBase64 = (file: File): Promise<string> => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.readAsDataURL(file);
-      reader.onload = () => {
-        const result = reader.result as string;
-        // Remove data:image/png;base64, prefix if present
-        const base64 = result.includes(',') ? result.split(',')[1] : result;
-        resolve(base64);
-      };
-      reader.onerror = error => reject(error);
-    });
-  };
+  const isDemo = !hasWallet || !chain.configured || String(wallet.address || '').toLowerCase().startsWith('0xd3');
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-
-    if (!file || !hash || !description) {
-      toast.error('Please fill in all fields');
-      return;
-    }
-
-    if (!wallet.address) {
-      toast.error('Wallet not connected');
-      return;
-    }
-
-    setIsLoading(true);
+    if (!file || !hash || !description || !wallet.address) return;
+    setTx({ status: 'pending' });
     try {
-      // Convert file to base64 for storage
-      const fileContent = await fileToBase64(file);
-      
-      const result = await addRecord(
-        hash,
-        file.name,
-        description,
-        wallet.address!,
-        fileContent,
-        file.type,
-        file.size
-      );
+      const form = new FormData();
+      form.append('file', file);
+      form.append('description', description);
+      form.append('recordType', recordType);
+      form.append('recordDate', recordDate);
+      form.append('contentHash', hash);
+      if (isDemo) {
+        form.append('relay', 'true');
+      }
 
-      refreshRecords();
-      toast.success('Record uploaded and stored successfully!', {
-        description: `Transaction: ${result.txHash.slice(0, 10)}...`,
+      const createRes = await fetch('/api/records', { method: 'POST', body: form });
+      const created = await createRes.json();
+      if (!createRes.ok) throw new Error(created.error || 'Off-chain store failed');
+
+      if (isDemo || created.relayed) {
+        setTx({ status: 'confirmed', hash: created.txHash || created.record?.txHash || '0x' + '0'.repeat(64) });
+        await refreshRecords();
+        await refreshLogs();
+        toast.success('Record registered on blockchain via cryptographic relayer');
+        setFile(null);
+        setDescription('');
+        setHash('');
+        return;
+      }
+
+      // Real wallet flow
+      const sent = await sendRegisterRecord(created.record.id, created.record.contentHash);
+      setTx({ status: 'pending', hash: sent.hash });
+      const receipt = await sent.wait();
+      if (!receipt || receipt.status !== 1) {
+        setTx({ status: 'reverted', hash: sent.hash, error: 'The contract transaction reverted.' });
+        return;
+      }
+      const confirmRes = await fetch(`/api/records/${created.record.id}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ txHash: receipt.hash }),
       });
-
-      // Reset form
+      const confirmed = await confirmRes.json();
+      if (!confirmRes.ok) throw new Error(confirmed.error || 'Backend could not verify the transaction');
+      setTx({ status: 'confirmed', hash: receipt.hash });
+      await refreshRecords();
+      await refreshLogs();
+      toast.success('Record registered after blockchain confirmation');
       setFile(null);
       setDescription('');
       setHash('');
-      const fileInput = document.querySelector(
-        'input[type="file"]'
-      ) as HTMLInputElement;
-      if (fileInput) fileInput.value = '';
     } catch (error) {
-      toast.error('Failed to upload record');
-      console.error(error);
-    } finally {
-      setIsLoading(false);
+      setTx({ status: 'error', hash: tx.hash, error: explainWalletError(error) });
+      toast.error(explainWalletError(error));
     }
   };
 
-  if (isDoctor) {
+  if (role === 'doctor') {
     return (
-      <div className="max-w-2xl space-y-8">
-        <div>
-          <h1 className="text-4xl font-bold text-foreground">Upload Record</h1>
-          <p className="text-muted-foreground mt-2">
-            Only patients can upload and store medical records
-          </p>
-        </div>
-        <Card className="p-8 border-border text-center text-muted-foreground">
-          <Cloud className="mx-auto mb-3 opacity-50" size={48} />
-          <p>You are logged in as a doctor. Use &quot;Records shared with me&quot; to view records patients have granted you access to.</p>
-        </Card>
-      </div>
+      <Card className="p-8 text-center text-muted-foreground">
+        Only patients can register records. Doctors use authorized records after consent.
+      </Card>
     );
   }
 
   return (
     <div className="max-w-2xl space-y-8">
-      {/* Header */}
       <div>
-        <h1 className="text-4xl font-bold text-foreground">Upload Record</h1>
+        <h1 className="text-3xl font-semibold">Register a synthetic record</h1>
         <p className="text-muted-foreground mt-2">
-          Upload your medical record to the blockchain
+          The file is encrypted off-chain. Only the SHA-256 hash is submitted to the contract after you sign the wallet
+          transaction.
         </p>
       </div>
 
-      {/* Form */}
-      <Card className="p-8 border-border">
+      {isDemo && (
+        <div className="rounded-lg border border-emerald-300 bg-emerald-50 dark:bg-emerald-950/40 p-4 text-xs text-emerald-800 dark:text-emerald-300 flex items-center justify-between">
+          <span>Demo Mode active: Records will be anchored directly using the SHA-256 cryptographic relayer.</span>
+          <span className="font-semibold px-2 py-0.5 rounded bg-emerald-200/60 dark:bg-emerald-900 text-emerald-900 dark:text-emerald-200 text-[10px]">Zero Wallet Required</span>
+        </div>
+      )}
+      <Card className="p-8">
         <form onSubmit={handleSubmit} className="space-y-6">
-          {/* File Upload */}
           <div>
-            <label className="block text-sm font-medium mb-2 text-foreground">
-              Medical Record File
-            </label>
-            <div className="border-2 border-dashed border-border rounded-lg p-8 text-center hover:border-primary/50 transition-colors cursor-pointer">
-              <input
-                type="file"
-                onChange={handleFileChange}
-                className="hidden"
-                id="file-input"
-                disabled={isLoading}
-              />
+            <label className="block text-sm font-medium mb-2">Synthetic medical file</label>
+            <div className="border-2 border-dashed rounded-lg p-8 text-center">
+              <input id="file-input" type="file" className="hidden" onChange={handleFileChange} />
               <label htmlFor="file-input" className="cursor-pointer block">
-                <Cloud className="mx-auto mb-3 text-muted-foreground" size={40} />
-                <p className="font-medium text-foreground">
-                  {file ? file.name : 'Click to upload or drag and drop'}
-                </p>
-                <p className="text-sm text-muted-foreground mt-1">
-                  PDF, DOCX, or other file formats
-                </p>
+                <Cloud className="mx-auto mb-3 text-muted-foreground" />
+                <p>{file ? file.name : 'Choose a demo PDF, text, or image file'}</p>
               </label>
             </div>
           </div>
-
-          {/* Hash Display */}
           {hash && (
-            <div>
-              <label className="block text-sm font-medium mb-2 text-foreground">
-                File Hash (SHA-256) - Document Integrity Code
-              </label>
-              <div className="p-4 bg-secondary rounded-lg border border-border">
-                <div className="flex items-start gap-3">
-                  <CheckCircle className="text-green-600 flex-shrink-0 mt-0.5" />
-                  <div className="flex-1">
-                    <p className="text-xs text-muted-foreground mb-1">
-                      Full Hash (64 characters):
-                    </p>
-                    <p className="text-sm font-mono text-foreground break-all bg-background p-2 rounded border border-border">
-                      {hash}
-                    </p>
-                    <p className="text-xs text-muted-foreground mt-2">
-                      Short form: <span className="font-mono">{formatHash(hash)}</span>
-                    </p>
-                    <p className="text-xs text-green-600 mt-1">
-                      ✓ Hash generated successfully - Document is ready to store
-                    </p>
-                  </div>
+            <div className="rounded-lg border p-4 text-sm">
+              <div className="flex gap-2">
+                <CheckCircle className="text-primary" size={18} />
+                <div>
+                  <p className="font-medium">SHA-256</p>
+                  <p className="font-mono break-all text-xs mt-1">{hash}</p>
+                  <p className="text-muted-foreground text-xs mt-1">Short: {formatHash(hash)}</p>
                 </div>
               </div>
             </div>
           )}
-
-          {/* Description */}
-          <div>
-            <label htmlFor="description" className="block text-sm font-medium mb-2 text-foreground">
-              Record Description
-            </label>
-            <Textarea
-              id="description"
-              placeholder="e.g., Chest X-Ray examination report from Dr. Smith"
-              value={description}
-              onChange={e => setDescription(e.target.value)}
-              disabled={isLoading}
-              className="min-h-24"
-            />
-          </div>
-
-          {/* Wallet Address Display */}
-          <div>
-            <label className="block text-sm font-medium mb-2 text-foreground">
-              Patient Wallet Address
-            </label>
-            <div className="relative">
-              <Input
-                type="text"
-                value={wallet.address || ''}
-                disabled
-                className="font-mono text-sm pr-20"
-              />
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className="absolute right-1 top-1 h-7 text-xs"
-                onClick={() => {
-                  if (wallet.address) {
-                    navigator.clipboard.writeText(wallet.address);
-                    toast.success('Wallet address copied!');
-                  }
-                }}
-              >
-                Copy
-              </Button>
+          <div className="grid sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium mb-2">Record type</label>
+              <Input value={recordType} onChange={(e) => setRecordType(e.target.value)} />
             </div>
-            <p className="text-xs text-muted-foreground mt-1">
-              Your unique wallet ID: {wallet.address?.slice(0, 10)}...{wallet.address?.slice(-8)}
-            </p>
+            <div>
+              <label className="block text-sm font-medium mb-2">Record date</label>
+              <Input type="date" value={recordDate} onChange={(e) => setRecordDate(e.target.value)} />
+            </div>
           </div>
-
-          {/* Submit Button */}
-          <Button
-            type="submit"
-            disabled={!file || !description || isLoading}
-            size="lg"
-            className="w-full"
-          >
-            {isLoading ? 'Uploading...' : 'Upload Record'}
+          <div>
+            <label className="block text-sm font-medium mb-2">Description (off-chain only)</label>
+            <Textarea value={description} onChange={(e) => setDescription(e.target.value)} className="min-h-24" />
+          </div>
+          <Button type="submit" className="w-full" disabled={!file || !description || tx.status === 'pending'}>
+            {tx.status === 'pending' ? 'Waiting for confirmation…' : 'Store file and register hash'}
           </Button>
         </form>
       </Card>
+      <TxStatus tx={tx} />
     </div>
   );
 }

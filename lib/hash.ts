@@ -25,7 +25,7 @@ export async function generateStringHash(text: string): Promise<string> {
 /**
  * Format hash for display (first 16 chars + ... + last 16 chars)
  */
-export function formatHash(hash: string): string {
+export function formatHash(hash?: string | null): string {
   if (!hash) return '';
   if (hash.length <= 32) return hash;
   return `${hash.slice(0, 16)}...${hash.slice(-16)}`;

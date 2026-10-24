@@ -11,9 +11,8 @@ const _geist = Geist({ subsets: ['latin'] })
 const _geistMono = Geist_Mono({ subsets: ['latin'] })
 
 export const metadata: Metadata = {
-  title: 'MedLedger - Web3 Medical Records',
-  description: 'Tamper-proof medical records powered by blockchain',
-  generator: 'v0.app',
+  title: 'MedLedger — Medical record integrity registry',
+  description: 'Register SHA-256 hashes of medical files on-chain and keep the files encrypted off-chain.',
 }
 
 export default function RootLayout({
@@ -23,10 +22,10 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className="font-sans antialiased bg-background text-foreground">
+      <body className={`${_geist.className} antialiased bg-background text-foreground`}>
         <ThemeProvider
           attribute="class"
-          defaultTheme="system"
+          defaultTheme="light"
           enableSystem
           disableTransitionOnChange
         >

@@ -4,166 +4,162 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { useWeb3 } from '@/lib/web3-context';
 import { useRouter } from 'next/navigation';
-import { Lock, ShieldCheck, Eye, UserCircle, Stethoscope } from 'lucide-react';
+import { Lock, ShieldCheck, Eye, UserCircle, Stethoscope, Hash, Database, Link2 } from 'lucide-react';
+import { useState } from 'react';
+import type { UserRole } from '@/types';
 
 export default function Page() {
-  const { wallet, role, setRole, isLoading, connect } = useWeb3();
+  const { wallet, role, isLoading, error, chain, connect, connectDemo, hasWallet } = useWeb3();
   const router = useRouter();
+  const [pendingRole, setPendingRole] = useState<UserRole | null>(null);
 
-  const handleSelectRole = (r: 'patient' | 'doctor') => {
-    setRole(r);
-  };
-
-  const handleConnect = async () => {
-    await connect();
-  };
-
-  const handleGetStarted = () => {
-    if (wallet.isConnected && role) {
+  const handleConnect = async (selected: UserRole) => {
+    setPendingRole(selected);
+    try {
+      if (hasWallet) {
+        await connect(selected);
+      } else {
+        await connectDemo(selected);
+      }
       router.push('/dashboard');
+    } catch {
+      setPendingRole(null);
     }
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-background to-secondary">
-      {/* Navigation */}
-      <nav className="border-b border-border bg-background/80 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
-          <div className="text-2xl font-bold text-primary">MedLedger</div>
+    <div className="min-h-screen bg-background">
+      <nav className="border-b border-border bg-background">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center gap-4">
+          <div>
+            <div className="text-2xl font-semibold tracking-tight text-primary">MedLedger</div>
+            <p className="text-xs text-muted-foreground">Integrity registry for medical records</p>
+          </div>
           {wallet.isConnected && role && (
-            <Button
-              variant="outline"
-              onClick={() => router.push('/dashboard')}
-            >
-              Dashboard
+            <Button variant="outline" onClick={() => router.push('/dashboard')}>
+              Open dashboard
             </Button>
           )}
         </div>
       </nav>
 
-      {/* Hero Section */}
-      <section className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-20">
-        <div className="text-center space-y-8">
-          <div className="space-y-4">
-            <h1 className="text-5xl sm:text-6xl font-bold text-balance text-foreground">
-              Tamper-Proof Medical Records
-              <span className="text-primary block">Powered by Web3</span>
+      <section className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-16 sm:py-20">
+        <div className="grid lg:grid-cols-2 gap-12 items-start">
+          <div className="space-y-6">
+            <p className="text-sm font-medium text-primary">College-ready blockchain demonstration</p>
+            <h1 className="text-4xl sm:text-5xl font-semibold text-foreground leading-tight text-balance">
+              Patient-controlled medical record integrity, with hashes on-chain and files off-chain.
             </h1>
-            <p className="text-xl text-muted-foreground max-w-2xl mx-auto text-balance">
-              Take control of your medical data. Secure, immutable records on the blockchain with complete patient consent and transparent access logs.
+            <p className="text-lg text-muted-foreground max-w-xl">
+              Hospitals and patients need a way to detect tampering without publishing diagnoses on a public ledger.
+              MedLedger stores only a record identifier, SHA-256 hash, owner wallet, and consent grants on Ethereum-compatible networks.
+            </p>
+            {!chain.configured && (
+              <div className="rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-950/40 dark:border-amber-800 p-4 text-sm">
+                Blockchain is not configured. Deploy the contract and set <code>NEXT_PUBLIC_CONTRACT_ADDRESS</code> before
+                registering records. Wallet login still requires a local node or testnet RPC.
+              </div>
+            )}
+            <div className="flex flex-col sm:flex-row gap-3">
+              <Button
+                size="lg"
+                disabled={isLoading}
+                onClick={() => handleConnect('patient')}
+                className="h-auto py-4 px-6 justify-start"
+              >
+                <UserCircle className="mr-2" />
+                {isLoading && pendingRole === 'patient' ? 'Waiting for wallet…' : 'Continue as demo patient'}
+              </Button>
+              <Button
+                size="lg"
+                variant="outline"
+                disabled={isLoading}
+                onClick={() => handleConnect('doctor')}
+                className="h-auto py-4 px-6 justify-start"
+              >
+                <Stethoscope className="mr-2" />
+                {isLoading && pendingRole === 'doctor' ? 'Waiting for wallet…' : 'Continue as demo doctor'}
+              </Button>
+            </div>
+            {!hasWallet && (
+              <div className="rounded-lg border border-blue-300 bg-blue-50 dark:bg-blue-950/40 dark:border-blue-800 p-4 text-sm flex items-start gap-2">
+                <span className="text-blue-600 dark:text-blue-400 font-semibold shrink-0">Demo mode</span>
+                <span className="text-blue-700 dark:text-blue-300">
+                  No wallet detected — buttons will log you in with a pre-set demo address. Install MetaMask to use your own wallet.
+                </span>
+              </div>
+            )}
+            {error && <p className="text-sm text-destructive">{error}</p>}
+            <p className="text-xs text-muted-foreground">
+              A wallet signature proves control of an address. It is not proof of a medical license. Use synthetic demo files
+              only.
             </p>
           </div>
 
-          {/* Step 1: Are you a Patient or Doctor? */}
-          {!role && (
-            <div className="space-y-4">
-              <p className="text-lg font-medium text-foreground">
-                Are you logging in as a Patient or Doctor?
-              </p>
-              <div className="flex gap-6 justify-center flex-wrap">
-                <Button
-                  size="lg"
-                  variant="outline"
-                  onClick={() => handleSelectRole('patient')}
-                  className="px-8 py-6 flex flex-col gap-2 h-auto"
-                >
-                  <UserCircle size={32} className="text-primary" />
-                  <span>Patient</span>
-                  <span className="text-xs font-normal text-muted-foreground">
-                    Store & manage your records, grant access
-                  </span>
-                </Button>
-                <Button
-                  size="lg"
-                  variant="outline"
-                  onClick={() => handleSelectRole('doctor')}
-                  className="px-8 py-6 flex flex-col gap-2 h-auto"
-                >
-                  <Stethoscope size={32} className="text-primary" />
-                  <span>Doctor</span>
-                  <span className="text-xs font-normal text-muted-foreground">
-                    View records shared with you, check access logs
-                  </span>
-                </Button>
-              </div>
+          <Card className="p-6 space-y-4">
+            <h2 className="font-semibold">How integrity verification works</h2>
+            <ol className="space-y-3 text-sm text-muted-foreground">
+              <li>1. A synthetic file is hashed with SHA-256 in the browser and again on the server.</li>
+              <li>2. The encrypted file is stored off-chain. Names and diagnoses never go into the contract.</li>
+              <li>3. The patient wallet registers the hash on the MedLedger contract and waits for confirmation.</li>
+              <li>4. Later, the same file is hashed again and compared with the on-chain value.</li>
+            </ol>
+            <div className="rounded-md bg-secondary p-4 text-xs font-mono leading-relaxed">
+              Patient / Doctor → Frontend → Authenticated API → Encrypted files
+              <br />
+              Frontend / API → RPC / wallet → MedLedger contract → Blockchain
             </div>
-          )}
+          </Card>
+        </div>
 
-          {/* Step 2: Connect Wallet (after role selected) */}
-          {role && !wallet.isConnected && (
-            <div className="space-y-4">
-              <p className="text-sm text-muted-foreground">
-                Logging in as <span className="font-semibold text-foreground capitalize">{role}</span>. Connect your wallet to continue.
-              </p>
-              <Button
-                size="lg"
-                onClick={handleConnect}
-                disabled={isLoading}
-                className="px-8"
-              >
-                {isLoading ? 'Connecting...' : 'Connect Wallet'}
-              </Button>
-            </div>
-          )}
-
-          {/* Step 3: Get Started (after connected) */}
-          {role && wallet.isConnected && (
-            <div className="flex gap-4 justify-center flex-wrap">
-              <p className="text-sm text-muted-foreground w-full">
-                Connected as <span className="font-semibold text-foreground capitalize">{role}</span>. You can store/check data and access the dashboard.
-              </p>
-              <Button size="lg" onClick={handleGetStarted} className="px-8">
-                Get Started
-              </Button>
-            </div>
-          )}
-
-          {/* Features Grid */}
-          <div className="grid md:grid-cols-3 gap-6 pt-12">
-            <Card className="p-6 text-left border-border hover:border-primary/50 transition-colors">
-              <div className="flex items-center gap-3 mb-3">
-                <div className="p-2 bg-primary/10 rounded-lg">
-                  <ShieldCheck className="text-primary" size={24} />
-                </div>
-                <h3 className="font-semibold text-lg">Immutable Records</h3>
-              </div>
-              <p className="text-muted-foreground">
-                Your medical records are hashed and stored on the blockchain, making them tamper-proof and permanently recorded.
-              </p>
+        <div className="grid md:grid-cols-3 gap-6 mt-16">
+          {[
+            {
+              icon: ShieldCheck,
+              title: 'Tamper evidence',
+              body: 'A changed file produces a different SHA-256 digest and a mismatch against the registered hash.',
+            },
+            {
+              icon: Lock,
+              title: 'Patient consent',
+              body: 'Doctors retrieve files only after an on-chain grant. Revocation is enforced by the API and the contract.',
+            },
+            {
+              icon: Eye,
+              title: 'Honest audit trail',
+              body: 'On-chain events are labeled separately from server logs. Transaction hashes come from the network, never generators.',
+            },
+          ].map((item) => (
+            <Card key={item.title} className="p-6">
+              <item.icon className="text-primary mb-3" />
+              <h3 className="font-semibold mb-2">{item.title}</h3>
+              <p className="text-sm text-muted-foreground">{item.body}</p>
             </Card>
+          ))}
+        </div>
 
-            <Card className="p-6 text-left border-border hover:border-primary/50 transition-colors">
-              <div className="flex items-center gap-3 mb-3">
-                <div className="p-2 bg-primary/10 rounded-lg">
-                  <Lock className="text-primary" size={24} />
-                </div>
-                <h3 className="font-semibold text-lg">Patient Control</h3>
-              </div>
-              <p className="text-muted-foreground">
-                You decide who can access your medical records. Grant or revoke access to healthcare providers at any time.
-              </p>
+        <div className="grid md:grid-cols-3 gap-6 mt-6">
+          {[
+            { icon: Hash, title: 'Step 1', body: 'Connect a wallet and sign in as patient or doctor.' },
+            { icon: Database, title: 'Step 2', body: 'Register a synthetic record hash on the local chain or testnet.' },
+            { icon: Link2, title: 'Step 3', body: 'Grant, verify, tamper-test, then revoke and confirm denial.' },
+          ].map((item) => (
+            <Card key={item.title} className="p-6">
+              <item.icon className="text-primary mb-3" />
+              <h3 className="font-semibold mb-2">{item.title}</h3>
+              <p className="text-sm text-muted-foreground">{item.body}</p>
             </Card>
-
-            <Card className="p-6 text-left border-border hover:border-primary/50 transition-colors">
-              <div className="flex items-center gap-3 mb-3">
-                <div className="p-2 bg-primary/10 rounded-lg">
-                  <Eye className="text-primary" size={24} />
-                </div>
-                <h3 className="font-semibold text-lg">Transparent Logs</h3>
-              </div>
-              <p className="text-muted-foreground">
-                Every access to your records is logged and visible to you. Complete transparency in your healthcare data.
-              </p>
-            </Card>
-          </div>
+          ))}
         </div>
       </section>
 
-      {/* Footer */}
-      <footer className="border-t border-border bg-background/50 mt-20">
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8 text-center text-sm text-muted-foreground">
-          <p>MedLedger - Decentralized Medical Records Management</p>
-          <p className="mt-2">Built for patient privacy and data integrity</p>
+      <footer className="border-t border-border">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8 text-sm text-muted-foreground space-y-2">
+          <p>MedLedger is an academic demonstration. It is not a certified medical device and is not HIPAA/GDPR certified.</p>
+          <p>
+            Network: {chain.chainName} ({chain.chainId})
+            {chain.contractAddress ? ` · Contract ${chain.contractAddress}` : ' · contract not configured'}
+          </p>
         </div>
       </footer>
     </div>

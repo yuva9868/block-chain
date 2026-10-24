@@ -1,0 +1,7 @@
+SYNTHETIC DEMO RECORD — NOT A REAL PATIENT
+Name: Demo Patient A
+Type: Complete blood count
+Date: 2026-01-15
+Hemoglobin: 13.8 g/dL
+WBC: 6.1 x10^9/L
+Notes: Generated for MedLedger classroom demonstration only.
